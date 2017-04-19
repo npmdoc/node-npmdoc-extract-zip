@@ -1,0 +1,227 @@
+<html><head></head><body><div class="apidocDiv">
+<style>
+/*csslint
+*/
+.apidocDiv {
+    background: #fff;
+    font-family: Arial, Helvetica, sans-serif;
+}
+.apidocDiv a[href] {
+    color: #33f;
+    font-weight: bold;
+    text-decoration: none;
+}
+.apidocDiv a[href]:hover {
+    text-decoration: underline;
+}
+.apidocCodeCommentSpan {
+    background: #bbf;
+    color: #000;
+    display: block;
+}
+.apidocCodeKeywordSpan {
+    color: #d00;
+    font-weight: bold;
+}
+.apidocCodePre {
+    background: #eef;
+    border: 1px solid;
+    color: #777;
+    padding: 5px;
+    white-space: pre-wrap;
+}
+.apidocFooterDiv {
+    margin-top: 20px;
+    text-align: center;
+}
+.apidocModuleLi {
+    margin-top: 10px;
+}
+.apidocSectionDiv {
+    border-top: 1px solid;
+    margin-top: 20px;
+}
+.apidocSignatureSpan {
+    color: #777;
+    font-weight: bold;
+}
+</style>
+<h1>api documentation for
+    <a href="https://github.com/maxogden/extract-zip">extract-zip (v1.6.0)</a>
+</h1>
+<h4>unzip a zip file into a directory using 100% pure gluten-free organic javascript</h4>
+<div class="apidocSectionDiv"><a href="#apidoc.tableOfContents" id="apidoc.tableOfContents"><h1>table of contents</h1></a><ol>
+
+    <li class="apidocModuleLi"><a href="#apidoc.module.extract-zip">module extract-zip</a><ol>
+
+        <li>
+
+            <a class="apidocElementLiA" href="#apidoc.element.extract-zip.extract-zip">
+            function <span class="apidocSignatureSpan"></span>extract-zip
+            <span class="apidocSignatureSpan">(zipPath, opts, cb)</span>
+            </a>
+
+        </li>
+
+    </ol></li>
+
+</ol></div>
+
+<div class="apidocSectionDiv">
+<h1><a href="#apidoc.module.extract-zip" id="apidoc.module.extract-zip">module extract-zip</a></h1>
+
+
+    <h2>
+        <a href="#apidoc.element.extract-zip.extract-zip" id="apidoc.element.extract-zip.extract-zip">
+        function <span class="apidocSignatureSpan"></span>extract-zip
+        <span class="apidocSignatureSpan">(zipPath, opts, cb)</span>
+        </a>
+    </h2>
+    <ul>
+    <li>description and source-code<pre class="apidocCodePre">extract-zip = function (zipPath, opts, cb) {
+  debug('creating target directory', opts.dir)
+
+  mkdirp(opts.dir, function (err) {
+    if (err) return cb(err)
+    openZip()
+  })
+
+  function openZip () {
+    debug('opening', zipPath, 'with opts', opts)
+
+    yauzl.open(zipPath, {lazyEntries: true}, function (err, zipfile) {
+      if (err) return cb(err)
+
+      var cancelled = false
+
+      zipfile.readEntry()
+
+      zipfile.on('close', function () {
+        if (!cancelled) {
+          debug('zip extraction complete')
+          cb()
+        }
+      })
+
+      zipfile.on('entry', function (entry) {
+        if (cancelled) {
+          debug('skipping entry', entry.fileName, {cancelled: cancelled})
+          return
+        }
+
+        debug('zipfile entry', entry.fileName)
+
+        if (/^__MACOSX\//.test(entry.fileName)) {
+          // dir name starts with __MACOSX/
+          zipfile.readEntry()
+          return
+        }
+
+        extractEntry(entry, function (err) {
+          // if any extraction fails then abort everything
+          if (err) {
+            cancelled = true
+            zipfile.close()
+            return cb(err)
+          }
+          debug('finished processing', entry.fileName)
+          zipfile.readEntry()
+        })
+      })
+
+      function extractEntry (entry, done) {
+        if (cancelled) {
+          debug('skipping entry extraction', entry.fileName, {cancelled: cancelled})
+          return setImmediate(done)
+        }
+
+        if (opts.onEntry) {
+          opts.onEntry(entry, zipfile)
+        }
+
+        var dest = path.join(opts.dir, entry.fileName)
+
+        // convert external file attr int into a fs stat mode int
+        var mode = (entry.externalFileAttributes &gt;&gt; 16) &amp; 0xFFFF
+        // check if it's a symlink or dir (using stat mode constants)
+        var IFMT = 61440
+        var IFDIR = 16384
+        var IFLNK = 40960
+        var symlink = (mode &amp; IFMT) === IFLNK
+        var isDir = (mode &amp; IFMT) === IFDIR
+
+        // check for windows weird way of specifying a directory
+        // https://github.com/maxogden/extract-zip/issues/13#issuecomment-154494566
+        var madeBy = entry.versionMadeBy &gt;&gt; 8
+        if (!isDir) isDir = (madeBy === 0 &amp;&amp; entry.externalFileAttributes === 16)
+
+        // if no mode then default to default modes
+        if (mode === 0) {
+          if (isDir) {
+            if (opts.defaultDirMode) mode = parseInt(opts.defaultDirMode, 10)
+            if (!mode) mode = 493 // Default to 0755
+          } else {
+            if (opts.defaultFileMode) mode = parseInt(opts.defaultFileMode, 10)
+            if (!mode) mode = 420 // Default to 0644
+          }
+        }
+
+        debug('extracting entry', { filename: entry.fileName, isDir: isDir, isSymlink: symlink })
+
+        // reverse umask first (~)
+        var umask = ~process.umask()
+        // &amp; with processes umask to override invalid perms
+        var procMode = mode &amp; umask
+
+        // always ensure folders are created
+        var destDir = dest
+        if (!isDir) destDir = path.dirname(dest)
+
+        debug('mkdirp', {dir: destDir})
+        mkdirp(destDir, function (err) {
+          if (err) {
+            debug('mkdirp error', destDir, {error: err})
+            cancelled = true
+            return done(err)
+          }
+
+          if (isDir) return done()
+
+          debug('opening read stream', dest)
+          zipfile.openReadStream(entry, function (err, readStream) {
+            if (err) {
+              debug('openReadStream error', err)
+              cancelled = true
+              return done(err)
+            }
+
+            readStream.on('error', function (err) {
+              console.log('read err', err)
+            })
+
+            if (symlink) writeSymlink()
+            else writeStream()
+
+            function writeStream () {
+              var writeStream = fs.createWriteStream(dest, {mode: procMode})
+              readStream.pipe(writeStream)
+
+              writeStream.on('finish', function () {
+                done()
+              })
+
+              writeStream.on('error', function (err) {
+                debug('write error', {error: err}) ...</pre></li>
+    <li>example usage<pre class="apidocCodePre">n/a</pre></li>
+    </ul>
+
+
+</div>
+
+<div class="apidocFooterDiv">
+    [ this document was created with
+    <a href="https://github.com/kaizhu256/node-utility2" target="_blank">utility2</a>
+    ]
+</div>
+</div>
+</body></html>
